@@ -30,11 +30,17 @@ git submodule add https://github.com/toyota-m2k/win-boo-lib external/win-boo-lib
 git commit -m "Add win-boo-lib submodule"
 ```
 
-推奨設定（親リポジトリの push 時にサブモジュールの push 漏れを検出）:
+推奨設定
+親リポジトリの push 時にサブモジュールの push 漏れを検出
 
 ```powershell
 git config push.recurseSubmodules check
 ```
+または、自動的にサブモジュールもpush
+```
+git config push.recurseSubmodules on-demand
+```
+
 
 ### 1.2 ソリューションに追加
 
