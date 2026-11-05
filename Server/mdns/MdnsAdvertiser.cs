@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
-using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -12,7 +10,6 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using io.github.toyota32k.BooLib.Utils;
-using Microsoft.UI.Composition;
 
 namespace io.github.toyota32k.BooLib.Server.mdns;
 
