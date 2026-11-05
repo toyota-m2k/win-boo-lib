@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq;
@@ -38,7 +39,11 @@ public static class UtExtensions {
         }
         return defValue;
     }
+    [Obsolete("Use GetStringOrNull() instead.")]
     public static string? GetNullableString(this IDictionary<string, object> dic, string key, string? defValue=null) {
+        return GetStringOrNull(dic, key, defValue);
+    }
+    public static string? GetStringOrNull(this IDictionary<string, object> dic, string key, string? defValue = null) {
         if (dic.TryGetValue(key, out var value)) {
             return value?.ToString();
         }
@@ -74,9 +79,25 @@ public static class UtExtensions {
         return (int)GetLong(dic, key, defValue);
     }
 
+    public static bool IsEmpty<T>(this IEnumerable<T>? v) {
+        if (v != null) {
+            return !v.Any();
+        }
+        return true;
+    }
 
     public static bool IsNullOrEmpty<T>(IEnumerable<T> v) {
         return !(v?.Any() ?? false);
+    }
+
+    public static IEnumerable<T> ToEnumerable<T>(this IList list) {
+        foreach (object item in list) {
+            yield return (T)item;
+        }
+    }
+
+    public static IEnumerable<T> ToSingleEnumerable<T>(this T item) {
+        yield return item;
     }
 
     public static T[] ArrayOf<T>(params T[] args) {
@@ -88,6 +109,10 @@ public static class UtExtensions {
     }
     public static bool IsNotEmpty([NotNullWhen(true)] this string? s) {
         return !string.IsNullOrEmpty(s);
+    }
+
+    public static bool ContainsIgnoreCase(this string s, string partialText) {
+        return s.IndexOf(partialText, StringComparison.CurrentCultureIgnoreCase) >= 0;
     }
 
     public static T ParseToEnum<T>(string name, T defValue, bool igonreCase = true) where T : struct {

@@ -4,7 +4,7 @@ using System.IO;
 
 namespace io.github.toyota32k.BooLib.Utils;
 
-internal static class JsonFileHelper {
+public static class JsonFileHelper {
     public static T? Read<T>(string path) {
         if (File.Exists(path)) {
             var json = File.ReadAllText(path);
