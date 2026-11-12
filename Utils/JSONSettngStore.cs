@@ -15,6 +15,7 @@ public class JSONSettngStore {
     private readonly JsonSerializerOptions _options;
     private readonly object _gate = new();
     private JsonObject _root = new();
+    private bool _isDirty = false;
 
     public static JsonSerializerOptions DefaultOptions { get; } = new() {
         WriteIndented = true,
@@ -24,15 +25,23 @@ public class JSONSettngStore {
     };
 
     public JSONSettngStore(string filePath, JsonSerializerOptions? options = null) {
-        _filePath = filePath;
+        _filePath = Path.GetFullPath(filePath);
         _options = options ?? DefaultOptions;
         Load();
     }
 
+    public void ResetAll() {
+        lock (_gate) {
+            _root = new JsonObject();
+            _isDirty = true;
+        }
+    }
     // ---------- 値の読み書き ----------
 
     public T Get<T>(string key, T defaultValue)
         => TryGet(key, out T value) ? value : defaultValue;
+    public T? GetOrNull<T>(string key) where T : class
+        => TryGet(key, out T? value) ? value : null;
 
     public bool TryGet<T>(string key, out T value) {
         lock (_gate) {
@@ -52,12 +61,22 @@ public class JSONSettngStore {
     public void Set<T>(string key, T value) {
         // 呼び出し側が後からオブジェクトを書き換えても影響しないよう、この時点で JsonNode に変換する
         var node = JsonSerializer.SerializeToNode(value, _options);
-        lock (_gate) { _root[key] = node; }
+        lock (_gate) { 
+            _root[key] = node;
+            _isDirty = true;
+        }
     }
 
 
     public bool Contains(string key) { lock (_gate) return _root.ContainsKey(key); }
-    public bool Remove(string key) { lock (_gate) return _root.Remove(key); }
+
+    public bool Remove(string key) { 
+        lock (_gate) { 
+            var result = _root.Remove(key);
+            if (result) _isDirty = true;
+            return result;
+        }
+    }
 
 
     public T Get<T>(SettingKey<T> key)
@@ -73,10 +92,12 @@ public class JSONSettngStore {
             _root = TryRead(_filePath)
                  ?? TryRead(_filePath + ".bak")   // 本体が壊れていたらバックアップを読む
                  ?? new JsonObject();
+            _isDirty = false;
         }
     }
 
-    public void Save() {
+    public void Save(bool force = false) {
+        if (!force && !_isDirty) return;
         Directory.CreateDirectory(Path.GetDirectoryName(_filePath)!);
         var tmp = _filePath + ".tmp";
 
@@ -93,6 +114,7 @@ public class JSONSettngStore {
         } else {
             File.Move(tmp, _filePath);
         }
+        _isDirty = false;
     }
 
     private JsonObject? TryRead(string path) {
