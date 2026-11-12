@@ -1,8 +1,8 @@
 ﻿using io.github.toyota32k.BooLib.Server.http.model;
-using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 
 namespace io.github.toyota32k.BooLib.Server.http.response;
 
@@ -20,7 +20,7 @@ public class TextHttpResponse : AbstractHttpResponse {
     }
 
     public static TextHttpResponse FromJson(HttpRequest req, IDictionary<string,object> jsonDic, HttpStatusCode statusCode=HttpStatusCode.Ok) {
-        return new TextHttpResponse(req, statusCode, JsonConvert.SerializeObject(jsonDic), CT_JSON);
+        return new TextHttpResponse(req, statusCode, JsonSerializer.Serialize(jsonDic), CT_JSON);
     }
     public static TextHttpResponse FromJsonString(HttpRequest req, string json, HttpStatusCode statusCode = HttpStatusCode.Ok) {
         return new TextHttpResponse(req, statusCode, json, CT_JSON);

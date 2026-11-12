@@ -30,19 +30,25 @@ public static class JsonUtil {
 
     #region Long
 
+
     public static long GetLongOrThrow(this JsonObject? j, string key) {
-        if (j == null) throw new ArgumentNullException(key);
-        var v = j[key]?.GetValue<long>();
-        if (v==null) {
+        var r = GetLongOrNull(j, key);
+        if (r == null) {
             throw new KeyNotFoundException(key);
         }
-        return v.Value;
+        return r.Value;
     }
 
     public static long? GetLongOrNull(this JsonObject? j, string key) {
         try {
-            if (j == null) return null;
-            return j[key]?.GetValue<long>();
+            if (j?[key] is not JsonValue v) return null;
+            return v.GetValueKind() switch {
+                JsonValueKind.String => long.Parse(v.GetValue<string>()),
+                JsonValueKind.Number => v.GetValue<long>(),
+                JsonValueKind.True => 1,
+                JsonValueKind.False => 0,
+                _ => null,
+            };
         }
         catch (Exception) {
             return null;
@@ -74,18 +80,32 @@ public static class JsonUtil {
     #region Boolean
 
     public static bool GetBoolOrThrow(this JsonObject? j, string key) {
-        if (j == null) throw new ArgumentNullException("key");
-        var v = j[key]?.GetValue<bool>();
-        if (v == null) {
-            throw new KeyNotFoundException("key");
+        var r = GetBoolOrNull(j, key);
+        if (r == null) {
+            throw new KeyNotFoundException(key);
         }
-        return v.Value;
+        return r.Value;
+    }
+
+    private static bool string2bool(string s) {
+        if (long.TryParse(s, out var l)) {
+            return l != 0;
+        }
+        if (bool.TryParse(s, out var b)) {
+            return b;
+        }
+        return false;
     }
 
     public static bool? GetBoolOrNull(this JsonObject? j, string key) {
         try {
-            if (j == null) return null;
-            return j[key]?.GetValue<bool>();
+            if (j?[key] is not JsonValue v) return null;
+            return v.GetValueKind() switch {
+                JsonValueKind.String => string2bool(v.GetValue<string>()),
+                JsonValueKind.Number => v.GetValue<long>()!=0,
+                JsonValueKind.True or JsonValueKind.False => v.GetValue<bool>(),
+                _ => null,
+            };
         }
         catch (Exception) {
             return null;
@@ -100,17 +120,28 @@ public static class JsonUtil {
     #region String
 
     public static string GetStringOrThrow(this JsonObject? j, string key) {
-        if (j == null) throw new ArgumentNullException(key);
-        var v = j[key]?.GetValue<string>();
-        if (v == null) {
+        //if (j == null) throw new ArgumentNullException(key);
+        //if (j[key] is not JsonValue v) throw new KeyNotFoundException(key);
+        //return v.GetValueKind() switch {
+        //    JsonValueKind.String => v.GetValue<string>(),
+        //    JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => v.ToJsonString(),
+        //    _ => throw new InvalidOperationException($"Unexpected value kind {v.GetValueKind()} for key {key}"),
+        //};
+        var r = GetStringOrNull(j, key);
+        if (r == null) {
             throw new KeyNotFoundException(key);
         }
-        return v;
+        return r;
     }
+
     public static string? GetStringOrNull(this JsonObject? j, string key) {
         try {
-            if (j == null) return null;
-            return j[key]?.GetValue<string>();
+            if (j?[key] is not JsonValue v) return null;
+            return v.GetValueKind() switch {
+                JsonValueKind.String => v.GetValue<string>(),
+                JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False => v.ToJsonString(),
+                _ => null,
+            };
         }
         catch (Exception) {
             return null;
