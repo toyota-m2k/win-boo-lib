@@ -8,7 +8,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 
-namespace BooWin.DI.implement.settings;
+namespace io.github.toyota32k.BooLib.Utils;
 
 public class JSONSettngStore {
     private readonly string _filePath;
