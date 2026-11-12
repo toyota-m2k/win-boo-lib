@@ -30,6 +30,11 @@ namespace io.github.toyota32k.BooLib.Server.mdns;
 public class MdnsAdvertiser {
     public const string ServiceType = MdnsCommon.ServiceType;
     public const string AppId = MdnsCommon.AppId;
+
+    // 自分自身へのAdvertiseを許可するか？
+    // 同一PC上で稼働するクライアントから検出可能とするため、Advatiser側は、基本 true で。
+    public bool MulticastLoopback { get; set; } = true;
+
     private const uint TtlAnnouncement = 120;
     private const uint TtlHostAddress = 120;
     private const int AnnounceIntervalMs = 30000;
@@ -150,7 +155,7 @@ public class MdnsAdvertiser {
                 sock.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 sock.Client.Bind(new IPEndPoint(addr, MdnsCommon.MdnsPort));
                 sock.JoinMulticastGroup(MdnsCommon.MulticastV4, addr);
-                sock.MulticastLoopback = false;
+                sock.MulticastLoopback = MulticastLoopback;
                 _sockets.Add(sock);
                 _logger.Debug($"mDNS bound on {addr}");
                 var s = sock;

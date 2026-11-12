@@ -30,6 +30,12 @@ public sealed class MdnsBrowser : IDisposable {
     //private readonly Dispatcher _ui;
     public event Action<UpdateInfo>? OnUpdate = null;
 
+    // 自分自身からのAdvertiseを受け取るか？
+    // 同一PC上で稼働するサーバーから検出可能とするため、通常はtrue
+    // ただし、SecureArchiveのように、クライアントがサーバーとしても動作する場合は、
+    // これを false にするか、MdnsBrowser#Start()に自身のfingerprintを渡して列挙対象から除外する。
+    public bool MulticastLoopback { get; set; } = true;
+
     // InstanceFqdn → 構築中ピア
     private readonly Dictionary<string, PeerBuilder> _building =
         new Dictionary<string, PeerBuilder>(StringComparer.OrdinalIgnoreCase);
@@ -118,7 +124,7 @@ public sealed class MdnsBrowser : IDisposable {
                 sock.Client.Bind(new IPEndPoint(addr, MdnsCommon.MdnsPort));
                 sock.JoinMulticastGroup(MdnsCommon.MulticastV4, addr);
                 // Browser は自分が出すクエリの応答を見る必要がない (応答は外部から来る) ので loopback off で OK
-                sock.MulticastLoopback = false;
+                sock.MulticastLoopback = MulticastLoopback;
                 _sockets.Add(sock);
                 logger.Debug($"mDNS-B bound on {addr}");
                 var s = sock;
@@ -352,10 +358,10 @@ public sealed class MdnsBrowser : IDisposable {
         if (!b.IsComplete) return;
         var txt = b.Txt;
         string? app = txt?.GetValue("app");
-        if (app == null || !string.Equals(app, MdnsCommon.AppId, StringComparison.OrdinalIgnoreCase)) {
-            // BooTube 以外 (winui-secure-archive 等) は除外
-            return;
-        }
+        //if (app == null || !string.Equals(app, MdnsCommon.AppId, StringComparison.OrdinalIgnoreCase)) {
+        //    // BooTube 以外 (winui-secure-archive 等) は除外
+        //    return;
+        //}
         bool isHttps = txt?.GetValue("https") == "1";
         string fp = txt?.GetValue("fp") ?? "";
         int ver = txt?.GetValue("version") != null && int.TryParse(txt.GetValue("version"), out var iv) ? iv : 1;
