@@ -86,6 +86,8 @@ public abstract class AbstractHttpResponse : IHttpResponse
 
     protected virtual void WriteHeaders(Stream output)
     {
+        // 1接続1リクエストで切断するため、クライアントに接続を再利用させない
+        Headers["Connection"] = "close";
         WriteText(output, $"HTTP/1.0 {(int)StatusCode} {StatusCode}\r\n");
         WriteText(output, string.Join("\r\n", Headers.Select(x => $"{x.Key}: {x.Value}")));
         WriteText(output, "\r\n");

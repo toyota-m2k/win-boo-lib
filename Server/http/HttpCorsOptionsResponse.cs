@@ -25,6 +25,7 @@ public class HttpCorsOptionsResponse : AbstractHttpResponse {
 
     public override void WriteResponse(Stream output) {
         WriteHeaders(output);
+        WriteText(output, "\r\n");
         output.Flush();
     }
 
