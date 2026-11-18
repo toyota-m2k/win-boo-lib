@@ -125,6 +125,7 @@ public class HttpServer {
             Alive = false;
             _cts?.Cancel();
             Listener?.Stop();
+            Processor.CloseAllClients();
         }
     }
 

@@ -2,7 +2,9 @@
 
 using io.github.toyota32k.BooLib.Server.http.model;
 using io.github.toyota32k.BooLib.Server.http.response;
+using io.github.toyota32k.BooLib.Utils;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -10,7 +12,6 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using io.github.toyota32k.BooLib.Utils;
 
 namespace io.github.toyota32k.BooLib.Server.http;
 
@@ -22,6 +23,7 @@ public class HttpProcessor {
 
     private List<Route> Routes = new List<Route>();
     private UtLog Logger = new UtLog(typeof(HttpProcessor));
+    private readonly ConcurrentDictionary<int, TcpClient> _clients = new();
 
     #endregion
 
@@ -36,75 +38,90 @@ public class HttpProcessor {
     public void HandleClient(int id, TcpClient tcpClient) {
         Task.Run(() => {
             using (tcpClient) {
-                // SSL 対応のため、入出力で同じ Stream を使う必要がある (SslStream は 1 コネクションで 1 インスタンス)。
-                Stream stream;
                 try {
-                    stream = WrapStream(tcpClient);
-                }
-                catch (System.Security.Authentication.AuthenticationException authEx) {
-                    // TLS ハンドシェイク失敗は HTTPS リスナー上では「想定内ノイズ」のことが多い:
-                    //   - 素の HTTP クライアントが HTTPS ポートを叩いた (typo / port scanner)
-                    //   - クライアント側で fingerprint pin 不一致 → 接続を即時切断
-                    //   - 古い TLS バージョンのクライアント
-                    // 本物のサーバ側不具合ではないので Info レベルに落とす。
-                    string peer = tcpClient.Client.RemoteEndPoint?.ToString() ?? "?";
-                    // HRESULT も出す。Win32Exception なら NativeErrorCode が SChannel SSPI のエラーコード
-                    // (SEC_E_CERT_UNKNOWN=0x80090327, SEC_E_NO_CREDENTIALS=0x8009030E 等) になるので
-                    // 不具合解析時に直接 SChannel 側へ当たれる。
-                    var baseEx = authEx.GetBaseException();
-                    int hr = baseEx is System.ComponentModel.Win32Exception w32 ? w32.NativeErrorCode : authEx.HResult;
-                    Logger.Info($"[{id}] TLS handshake failed from {peer}: {baseEx.Message} (HRESULT=0x{hr:X8})");
-                    return;
-                }
-                catch (System.IO.IOException ioEx) {
-                    // 接続が途中で切れただけ。ログを汚さないよう Info で。
-                    Logger.Info($"[{id}] Connection aborted before request: {ioEx.Message}");
-                    return;
-                }
-                catch (Exception e) {
-                    // 上記以外は本当に想定外。Error で残す。
-                    Logger.Error(e, $"[{id}] WrapStream failed unexpectedly.");
-                    return;
-                }
-                Logger.Debug($"[{id}] Request Accepted.");
+                    // 終了時にクローズできるように、接続中の TcpClient を保持しておく。
+                    _clients[id] = tcpClient;
 
-                string peerAddress = "";
-                string? address_port = tcpClient.Client.RemoteEndPoint?.ToString();
-                if(address_port!= null && address_port.Contains(':')) {
-                    peerAddress = address_port.Substring(0,address_port.IndexOf(":"));
-                }
-
-                var chronos = new Chronos(Logger);
-                string url = "?";
-                using (IHttpResponse response = ProcessRequest(id, peerAddress, stream, stream, chronos)) {
+                    // SSL 対応のため、入出力で同じ Stream を使う必要がある (SslStream は 1 コネクションで 1 インスタンス)。
+                    Stream stream;
                     try {
-                        url = response.Request?.Url ?? "?";
-                        Logger.Info($"[{id}] Responding: {url}");
-                        response.WriteResponse(stream);
-                        stream.Flush();
-                        Logger.Info($"[{id}] Succeeded: {url}");
+                        stream = WrapStream(tcpClient);
+                    }
+                    catch (System.Security.Authentication.AuthenticationException authEx) {
+                        // TLS ハンドシェイク失敗は HTTPS リスナー上では「想定内ノイズ」のことが多い:
+                        //   - 素の HTTP クライアントが HTTPS ポートを叩いた (typo / port scanner)
+                        //   - クライアント側で fingerprint pin 不一致 → 接続を即時切断
+                        //   - 古い TLS バージョンのクライアント
+                        // 本物のサーバ側不具合ではないので Info レベルに落とす。
+                        string peer = tcpClient.Client.RemoteEndPoint?.ToString() ?? "?";
+                        // HRESULT も出す。Win32Exception なら NativeErrorCode が SChannel SSPI のエラーコード
+                        // (SEC_E_CERT_UNKNOWN=0x80090327, SEC_E_NO_CREDENTIALS=0x8009030E 等) になるので
+                        // 不具合解析時に直接 SChannel 側へ当たれる。
+                        var baseEx = authEx.GetBaseException();
+                        int hr = baseEx is System.ComponentModel.Win32Exception w32 ? w32.NativeErrorCode : authEx.HResult;
+                        Logger.Info($"[{id}] TLS handshake failed from {peer}: {baseEx.Message} (HRESULT=0x{hr:X8})");
+                        return;
+                    }
+                    catch (System.IO.IOException ioEx) {
+                        // 接続が途中で切れただけ。ログを汚さないよう Info で。
+                        Logger.Info($"[{id}] Connection aborted before request: {ioEx.Message}");
+                        return;
                     }
                     catch (Exception e) {
-                        Logger.Error(e, $"[{id}] Failed: {url}");
+                        // 上記以外は本当に想定外。Error で残す。
+                        Logger.Error(e, $"[{id}] WrapStream failed unexpectedly.");
+                        return;
                     }
-                    finally {
-                        chronos.Lap($"[{id}] Completed: {url}");
-                        try { stream.Dispose(); } catch { /* ignore */ }
-                    }
-                }
-                //Logger.Debug($"[{id}] Shutdown Send-Socket: {url}");
-                ////var lingerOption = new LingerOption(true, 60);
-                ////tcpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Linger, lingerOption);
-                //tcpClient.Client.Shutdown(SocketShutdown.Send);
+                    Logger.Debug($"[{id}] Request Accepted.");
 
-                //// クライアントが接続を切るまで待機
-                //Logger.Debug($"[{id}] Finishing: {url} ...");
-                //if (IsSocketConnected(tcpClient.Client)) {
-                //    WaitForClosed(inputStream);
-                //}
-                Logger.Debug($"[{id}] Finished: {url}");
+                    string peerAddress = "";
+                    string? address_port = tcpClient.Client.RemoteEndPoint?.ToString();
+                    if (address_port != null && address_port.Contains(':')) {
+                        peerAddress = address_port.Substring(0, address_port.IndexOf(":"));
+                    }
+
+                    var chronos = new Chronos(Logger);
+                    string url = "?";
+                    using (IHttpResponse response = ProcessRequest(id, peerAddress, stream, stream, chronos)) {
+                        try {
+                            url = response.Request?.Url ?? "?";
+                            Logger.Info($"[{id}] Responding: {url}");
+                            response.WriteResponse(stream);
+                            stream.Flush();
+                            Logger.Info($"[{id}] Succeeded: {url}");
+                        }
+                        catch (Exception e) {
+                            Logger.Error(e, $"[{id}] Failed: {url}");
+                        }
+                        finally {
+                            chronos.Lap($"[{id}] Completed: {url}");
+                            try { stream.Dispose(); } catch { /* ignore */ }
+                        }
+                    }
+                    //Logger.Debug($"[{id}] Shutdown Send-Socket: {url}");
+                    ////var lingerOption = new LingerOption(true, 60);
+                    ////tcpClient.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Linger, lingerOption);
+                    //tcpClient.Client.Shutdown(SocketShutdown.Send);
+
+                    //// クライアントが接続を切るまで待機
+                    //Logger.Debug($"[{id}] Finishing: {url} ...");
+                    //if (IsSocketConnected(tcpClient.Client)) {
+                    //    WaitForClosed(inputStream);
+                    //}
+                    Logger.Debug($"[{id}] Finished: {url}");
+                }
+                finally {
+                    _clients.TryRemove(id, out _);
+                }
             }
         });
+    }
+
+    public void CloseAllClients() {
+        foreach (var c in _clients.Values) {
+            try { c.Close(); } catch { }
+        }
+        _clients.Clear();
     }
 
     //private bool IsSocketConnected(Socket s) {
