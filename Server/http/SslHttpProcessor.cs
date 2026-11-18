@@ -20,7 +20,9 @@ public class SslHttpProcessor : HttpProcessor {
 
     protected override Stream WrapStream(TcpClient tcpClient) {
         tcpClient.ReceiveTimeout = 30000;
-        tcpClient.SendTimeout = 30000;
+        // 動画ストリーミング中、クライアント(MediaPlayer)がバッファ満杯で受信を止めると
+        // 同期 Write がブロックされるため、送信タイムアウトは無効化する（HTTP 時と同じ挙動）。
+        tcpClient.SendTimeout = 0;
 
         var ssl = new SslStream(tcpClient.GetStream(), leaveInnerStreamOpen: false);
         // Tls13 は .NET 9 / Win11 では使用可能。Tls12 only な OS でも自動フォールバックする。
