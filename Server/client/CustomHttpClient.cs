@@ -1,10 +1,8 @@
 ﻿using io.github.toyota32k.BooLib.Server.mdns;
 using io.github.toyota32k.BooLib.Utils;
 using System;
-using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.Net.Http;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 

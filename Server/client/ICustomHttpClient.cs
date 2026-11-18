@@ -6,6 +6,9 @@ using System.Threading.Tasks;
 
 namespace io.github.toyota32k.BooLib.Server.client;
 
+/**
+ * fingerprint ベースの証明書チェックを行うHttpClientの i/f 定義
+ */
 public interface ICustomHttpClient : IDisposable {
     TimeSpan Timeout { get; set; }
     Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, HttpCompletionOption completionOption, CancellationToken? cancellationToken = null);

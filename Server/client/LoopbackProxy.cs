@@ -10,9 +10,9 @@ using System.Threading.Tasks;
 namespace io.github.toyota32k.BooLib.Server.client;
 
 /**
- * MediaPlayer / Image(BitmapImage) は WinRT 側の通信スタックを使うため、
- * HttpClientHandler の証明書検証 (mDNS で得た Fingerprint による pin) が効かない。
- * そこで localhost 上に中継サーバーを立て、Fingerprint 検証付きの IHttpClient で
+ * REST API は、CustomHttpClient を利用するだけでSSL通信が可能だが、
+ * MediaPlayer や Image(BitmapImage) など、通信に関与できないケースに対して、
+ * localhost 上に中継サーバーを立て、Fingerprint 検証付きの ICustomHttpClient で
  * 実サーバーへ転送する。
  */
 public sealed class LoopbackProxy : IDisposable {
@@ -27,12 +27,11 @@ public sealed class LoopbackProxy : IDisposable {
     private ICustomHttpClient? _client;
 
     /**
-     * 中継先のホストを設定する。null を渡すと中継を停止する。
+     * 中継先のホストを設定する。
      */
     public void SetPeer(ICustomPeer peer, HttpClient innerClient) {
         lock (_lock) {
             _client?.Dispose();
-            _client = null;
             _peer = peer;
             _client = new CustomHttpClient(peer, innerClient) {
                 Timeout = Timeout.InfiniteTimeSpan
@@ -40,6 +39,18 @@ public sealed class LoopbackProxy : IDisposable {
         }
     }
 
+    public void SetPeer(ICustomPeer peer, ICustomHttpClient innerClient) {
+        lock (_lock) {
+            _client?.Dispose();
+            _peer = peer;
+            _client = innerClient;
+            innerClient.Timeout = Timeout.InfiniteTimeSpan;
+        }
+    }
+
+    /**
+     * 中継を停止する。
+     */
     public void ResetPeer() {
         lock (_lock) {
             _client?.Dispose();
@@ -50,6 +61,7 @@ public sealed class LoopbackProxy : IDisposable {
 
     /**
      * 実サーバーの URL を、中継サーバー経由の URL に変換する。
+     * このラップされたURLを、ImageやMediaPlayerなどのSourceにセットする。
      */
     public string Wrap(string url) {
         EnsureStarted();
@@ -134,6 +146,11 @@ public sealed class LoopbackProxy : IDisposable {
                 await src.CopyToAsync(response.OutputStream, token);
             }
             response.Close();
+        }
+        catch (HttpIOException ex) {
+            // 上流（実サーバー）側でレスポンスが途中終了した
+            Logger.Error(ex, $"upstream ended prematurely: {ex.HttpRequestError}");
+            try { response.Abort(); } catch { }
         }
         catch (Exception ex) when (ex is HttpListenerException or IOException or OperationCanceledException) {
             // シーク等によるクライアント側の切断は正常系
