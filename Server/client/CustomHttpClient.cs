@@ -8,15 +8,21 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace io.github.toyota32k.BooLib.Server.client; 
-public class PeerEndpointHttpClient : ICustonHttpClient {
+namespace io.github.toyota32k.BooLib.Server.client;
+
+/**
+ * ICustomHttpClientの実装クラス
+ * innerClientでデータ送受信時に、Options に ICustomPeerを付与し、
+ * CustomHttpClient.CreateHttpClientHandler() で Fingerprint 検証を行うスキームが構築できる。
+ */
+public class CustomHttpClient : ICustomHttpClient {
     public static UtLog Logger = new UtLog("PEHClient");
     private readonly ICustomPeer _peerHost;
     private readonly HttpClient _httpClient;
 
-    public PeerEndpointHttpClient(ICustomPeer peerHost, HttpClient client) {
+    public CustomHttpClient(ICustomPeer peerHost, HttpClient innerClient) {
         _peerHost = peerHost;
-        _httpClient = client;
+        _httpClient = innerClient;
     }
 
     public void Dispose() {
@@ -69,11 +75,11 @@ public class PeerEndpointHttpClient : ICustonHttpClient {
         get => _httpClient.Timeout;
         set => _httpClient.Timeout = value;
     }
-    //public static string HTTP_CLIENT_FACTORY_NAME = "PeerEndpointHttpClientFactory";
+    //public static string HTTP_CLIENT_FACTORY_NAME = "CustomHttpClientFactory";
     public static readonly HttpRequestOptionsKey<ICustomPeer> KEY = new("PeerEndpoint");
 
-    public ICustonHttpClient CreateHttpClient(HttpClient client) {
-        return new PeerEndpointHttpClient(_peerHost, client);
+    public ICustomHttpClient CreateHttpClient(HttpClient client) {
+        return new CustomHttpClient(_peerHost, client);
     }
 
     /**
@@ -87,7 +93,7 @@ public class PeerEndpointHttpClient : ICustonHttpClient {
      * var services = new ServiceCollection();
      * services
      *     .AddHttpClient(HTTP_CLIENT_FACTORY_NAME)
-     *     .ConfigurePrimaryHttpMessageHandler(() => PeerEndpointHttpClient.CreateHttpClientHandler());
+     *     .ConfigurePrimaryHttpMessageHandler(() => CustomHttpClient.CreateHttpClientHandler());
      * ```
      */
     public static HttpClientHandler CreateHttpClientHandler() {

@@ -24,7 +24,7 @@ public sealed class LoopbackProxy : IDisposable {
     private int _port;
 
     private ICustomPeer? _peer;
-    private ICustonHttpClient? _client;
+    private ICustomHttpClient? _client;
 
     /**
      * 中継先のホストを設定する。null を渡すと中継を停止する。
@@ -34,11 +34,9 @@ public sealed class LoopbackProxy : IDisposable {
             _client?.Dispose();
             _client = null;
             _peer = peer;
-            if (peer != null && innerClient != null) {
-                _client = new PeerEndpointHttpClient(peer, innerClient) {
-                    Timeout = Timeout.InfiniteTimeSpan
-                };
-            }
+            _client = new CustomHttpClient(peer, innerClient) {
+                Timeout = Timeout.InfiniteTimeSpan
+            };
         }
     }
 
@@ -90,7 +88,7 @@ public sealed class LoopbackProxy : IDisposable {
         try {
             var target = ctx.Request.QueryString["u"];
             ICustomPeer? peer;
-            ICustonHttpClient? client;
+            ICustomHttpClient? client;
             lock (_lock) {
                 peer = _peer;
                 client = _client;
@@ -101,7 +99,7 @@ public sealed class LoopbackProxy : IDisposable {
                 return;
             }
             // 現在接続中のホスト以外への中継は許可しない
-            if (!target.StartsWith(peer.BaseUrl + "/", StringComparison.OrdinalIgnoreCase)) {
+            if (!peer.CheckUrl(target)) {
                 response.StatusCode = (int)HttpStatusCode.Forbidden;
                 response.Close();
                 return;
