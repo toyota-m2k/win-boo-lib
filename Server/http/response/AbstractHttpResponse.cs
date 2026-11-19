@@ -1,4 +1,5 @@
 ﻿using io.github.toyota32k.BooLib.Server.http.model;
+using io.github.toyota32k.BooLib.Server.http;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -84,11 +85,33 @@ public abstract class AbstractHttpResponse : IHttpResponse
 
     protected abstract void Prepare();
 
+    /// <summary>
+    /// 接続を維持するか (HttpProcessor がセットする)。
+    /// 応答ボディの長さが確定しない場合や、Content-Length 通りに送信できなかった場合は false に戻される。
+    /// </summary>
+    public bool KeepAlive { get; set; } = false;
+
+    private bool HasDefiniteBodyLength =>
+        (int)StatusCode < 200
+        || StatusCode == HttpStatusCode.NoContent
+        || StatusCode == HttpStatusCode.NotModified
+        || Headers.ContainsKey("Content-Length");
+
     protected virtual void WriteHeaders(Stream output)
     {
-        // 1接続1リクエストで切断するため、クライアントに接続を再利用させない
-        Headers["Connection"] = "close";
-        WriteText(output, $"HTTP/1.0 {(int)StatusCode} {StatusCode}\r\n");
+        if (KeepAlive && !HasDefiniteBodyLength) {
+            // ボディの終端をクライアントが判断できないので、接続を閉じて終端を示す。
+            KeepAlive = false;
+        }
+        if (KeepAlive) {
+            Headers["Connection"] = "keep-alive";
+            var version = Request.ProtocolVersion == "HTTP/1.1" ? "HTTP/1.1" : "HTTP/1.0";
+            WriteText(output, $"{version} {(int)StatusCode} {StatusCode}\r\n");
+        } else {
+            // 1接続1リクエストで切断するため、クライアントに接続を再利用させない
+            Headers["Connection"] = "close";
+            WriteText(output, $"HTTP/1.0 {(int)StatusCode} {StatusCode}\r\n");
+        }
         WriteText(output, string.Join("\r\n", Headers.Select(x => $"{x.Key}: {x.Value}")));
         WriteText(output, "\r\n");
     }
@@ -99,12 +122,23 @@ public abstract class AbstractHttpResponse : IHttpResponse
         try {
             Prepare();
         } catch(HttpException ex) {
+            ex.ErrorResponse.KeepAlive = KeepAlive;
             ex.ErrorResponse.WriteResponse(output);
+            KeepAlive = ex.ErrorResponse.KeepAlive;
             return;
         }
         WriteHeaders(output);
         WriteText(output, "\r\n");
-        WriteBody(output);
+        if (KeepAlive && Request.Method != "HEAD" && Headers.ContainsKey("Content-Length")) {
+            // 送信したボディ長が Content-Length と食い違うと後続のリクエストが壊れるので、その場合は接続を閉じる。
+            var counter = new CountingWriteStream(output);
+            WriteBody(counter);
+            if (counter.Count != ContentLength) {
+                KeepAlive = false;
+            }
+        } else {
+            WriteBody(output);
+        }
         output.Flush();
     }
 

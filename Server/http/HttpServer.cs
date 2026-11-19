@@ -27,6 +27,15 @@ public class HttpServer {
     /// <summary>true なら HTTPS リスナーとして起動 (cert 必須)。</summary>
     public bool IsSecure { get; }
 
+    /// <summary>
+    /// true なら Keep-Alive を有効にする (1 接続で複数リクエストを処理)。
+    /// false (既定) なら従来通り、応答ごとに Connection: close で接続を閉じる。
+    /// </summary>
+    public bool IsKeepAlive {
+        get => Processor.IsKeepAlive;
+        set => Processor.IsKeepAlive = value;
+    }
+
     private BehaviorSubject<bool> _running = new BehaviorSubject<bool>(false);
     public IObservable<bool> Running => _running;
 

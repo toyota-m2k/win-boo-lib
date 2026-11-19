@@ -25,6 +25,15 @@ public class HttpProcessor {
     private UtLog Logger = new UtLog(typeof(HttpProcessor));
     private readonly ConcurrentDictionary<int, TcpClient> _clients = new();
 
+    /// <summary>true なら Keep-Alive (1接続で複数リクエスト) を有効にする。false なら従来通り Connection: close。</summary>
+    public bool IsKeepAlive { get; set; } = true;
+    /// <summary>Keep-Alive 時、次のリクエストを待つ最大時間(ms)</summary>
+    public int KeepAliveTimeoutMs { get; set; } = 15000;
+    /// <summary>Keep-Alive 時、1接続で処理する最大リクエスト数</summary>
+    public int MaxKeepAliveRequests { get; set; } = 100;
+    /// <summary>Keep-Alive 時、未読リクエストボディを読み捨てる上限。超えたら接続を閉じる。</summary>
+    public long MaxDrainBytes { get; set; } = 1024 * 1024;
+
     #endregion
 
     #region Constructors
@@ -82,21 +91,56 @@ public class HttpProcessor {
 
                     var chronos = new Chronos(Logger);
                     string url = "?";
-                    using (IHttpResponse response = ProcessRequest(id, peerAddress, stream, stream, chronos)) {
-                        try {
-                            url = response.Request?.Url ?? "?";
-                            Logger.Info($"[{id}] Responding: {url}");
-                            response.WriteResponse(stream);
-                            stream.Flush();
-                            Logger.Info($"[{id}] Succeeded: {url}");
+                    try {
+                        int requestCount = 0;
+                        while (true) {
+                            int firstByte = -1;
+                            if (requestCount > 0) {
+                                // Keep-Alive: 次のリクエストを待つ。タイムアウトや切断は正常終了として扱う。
+                                firstByte = WaitForNextRequest(tcpClient, stream);
+                                if (firstByte < 0) {
+                                    Logger.Debug($"[{id}] Keep-Alive connection closed (idle or by client).");
+                                    break;
+                                }
+                            }
+                            requestCount++;
+
+                            bool keepAlive = false;
+                            RequestBodyStream? body;
+                            using (IHttpResponse response = ProcessRequest(id, peerAddress, stream, stream, chronos, firstByte, out body)) {
+                                try {
+                                    url = response.Request?.Url ?? "?";
+                                    if (response is AbstractHttpResponse ar) {
+                                        keepAlive = ShouldKeepAlive(response.Request, body, requestCount);
+                                        ar.KeepAlive = keepAlive;
+                                    }
+                                    Logger.Info($"[{id}] Responding: {url}");
+                                    response.WriteResponse(stream);
+                                    stream.Flush();
+                                    if (response is AbstractHttpResponse ar2) {
+                                        keepAlive = keepAlive && ar2.KeepAlive;
+                                    }
+                                    Logger.Info($"[{id}] Succeeded: {url}");
+                                }
+                                catch (Exception e) {
+                                    keepAlive = false;
+                                    Logger.Error(e, $"[{id}] Failed: {url}");
+                                }
+                                finally {
+                                    chronos.Lap($"[{id}] Completed: {url}");
+                                }
+                            }
+                            // 未読のリクエストボディが残っていると次のリクエストとして解釈されてしまうので読み捨てる。
+                            if (keepAlive && (body == null || !body.Drain(MaxDrainBytes))) {
+                                keepAlive = false;
+                            }
+                            if (!keepAlive) {
+                                break;
+                            }
                         }
-                        catch (Exception e) {
-                            Logger.Error(e, $"[{id}] Failed: {url}");
-                        }
-                        finally {
-                            chronos.Lap($"[{id}] Completed: {url}");
-                            try { stream.Dispose(); } catch { /* ignore */ }
-                        }
+                    }
+                    finally {
+                        try { stream.Dispose(); } catch { /* ignore */ }
                     }
                     //Logger.Debug($"[{id}] Shutdown Send-Socket: {url}");
                     ////var lingerOption = new LingerOption(true, 60);
@@ -160,10 +204,16 @@ public class HttpProcessor {
 
     #region Private Methods
 
-    private static string Readline(Stream stream) {
+    private static string Readline(Stream stream, int firstByte = -1) {
         var sb = new StringBuilder();
         while (true) {
-            int c = stream.ReadByte();
+            int c;
+            if (firstByte >= 0) {
+                c = firstByte;
+                firstByte = -1;
+            } else {
+                c = stream.ReadByte();
+            }
             if (c == -1) {
                 // 接続が閉じられた / タイムアウト到達。EOS を例外で抜けて呼び出し側の try/catch で扱う。
                 throw new IOException("End of stream while reading line.");
@@ -178,6 +228,48 @@ public class HttpProcessor {
     private static void Write(Stream stream, string text) {
         byte[] bytes = Encoding.UTF8.GetBytes(text);
         stream.Write(bytes, 0, bytes.Length);
+    }
+
+    /// <summary>
+    /// Keep-Alive 接続で次のリクエストの先頭 1 バイトを待つ。
+    /// リクエスト間の空行 (CRLF) は読み飛ばす。
+    /// </summary>
+    /// <returns>先頭バイト。切断/タイムアウトの場合は -1</returns>
+    private int WaitForNextRequest(TcpClient tcpClient, Stream stream) {
+        int orgTimeout = tcpClient.ReceiveTimeout;
+        try {
+            tcpClient.ReceiveTimeout = KeepAliveTimeoutMs;
+            while (true) {
+                int c = stream.ReadByte();
+                if (c == '\r' || c == '\n') continue;
+                return c;
+            }
+        }
+        catch (IOException) {
+            return -1;
+        }
+        catch (ObjectDisposedException) {
+            return -1;
+        }
+        catch (SocketException) {
+            return -1;
+        }
+        finally {
+            try { tcpClient.ReceiveTimeout = orgTimeout; } catch { /* ignore */ }
+        }
+    }
+
+    /// <summary>
+    /// このリクエストの後も接続を維持してよいか。
+    /// </summary>
+    private bool ShouldKeepAlive(HttpRequest? request, RequestBodyStream? body, int requestCount) {
+        if (!IsKeepAlive || request == null || body == null) return false;
+        if (requestCount >= MaxKeepAliveRequests) return false;
+        var connection = GetValueOrNull(request.Headers, "connection", "")
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (connection.Any(it => it.Equals("close", StringComparison.OrdinalIgnoreCase))) return false;
+        if (request.ProtocolVersion == "HTTP/1.1") return true;
+        return connection.Any(it => it.Equals("keep-alive", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -238,12 +330,19 @@ public class HttpProcessor {
         else return false;
     }
 
-    private IHttpResponse ProcessRequest(int id, string peerAddress, Stream inputStream, Stream outputStream, Chronos chronos) {
+    private IHttpResponse ProcessRequest(int id, string peerAddress, Stream inputStream, Stream outputStream, Chronos chronos, int firstByte, out RequestBodyStream? body) {
+        body = null;
         try {
-            var request = ParseHeader(id, peerAddress, inputStream, outputStream);
+            var request = ParseHeader(id, peerAddress, inputStream, outputStream, firstByte);
             chronos.Start($"[{id}] request: {request.Url}");
+            if (IsKeepAlive && !request.Headers.ContainsKey("transfer-encoding")) {
+                // Keep-Alive 時は Content-Length 分だけ読める Stream でボディを扱う。
+                // (transfer-encoding 付きはボディ長が分からないので body=null → 接続を閉じる)
+                long contentLength = Convert.ToInt64(GetValueOrNull(request.Headers, "content-length", "0"));
+                body = new RequestBodyStream(inputStream, contentLength);
+            }
             Route route = GetRoute(request);
-            ParseContent(inputStream, request, route);
+            ParseContent(body ?? inputStream, request, route);
             return route.Process(request);
         }
         catch (Exception ex) {
@@ -262,9 +361,9 @@ public class HttpProcessor {
     }
 
 
-    private HttpRequest ParseHeader(int id, string peerAddress, Stream inputStream, Stream outputStream) {
+    private HttpRequest ParseHeader(int id, string peerAddress, Stream inputStream, Stream outputStream, int firstByte) {
         //Read Request Line
-        string request = Readline(inputStream);
+        string request = Readline(inputStream, firstByte);
 
         string[] tokens = request.Split(' ');
         if (tokens.Length != 3) {
@@ -295,7 +394,7 @@ public class HttpProcessor {
             string value = line.Substring(pos, line.Length - pos);
             headers.Add(name.ToLower(), value);
         }
-        return new HttpRequest(id, peerAddress, method, url, headers, outputStream);
+        return new HttpRequest(id, peerAddress, method, url, headers, outputStream, protocolVersion.ToUpper());
     }
 
     private Route GetRoute(HttpRequest request) {
@@ -345,10 +444,10 @@ public class HttpProcessor {
             byte[] bytes = new byte[totalBytes];
 
             while (bytesLeft > 0) {
-                byte[] buffer = new byte[bytesLeft > 1024 ? 1024 : bytesLeft];
-                int n = inputStream.Read(buffer, 0, buffer.Length);
-                buffer.CopyTo(bytes, totalBytes - bytesLeft);
-
+                int n = inputStream.Read(bytes, totalBytes - bytesLeft, bytesLeft);
+                if (n <= 0) {
+                    throw new IOException("End of stream while reading request body.");
+                }
                 bytesLeft -= n;
             }
             // エンコーディングは UTF8 限定
